@@ -1,0 +1,19 @@
+{
+  "name": "芋作業管理",
+  "short_name": "芋管理",
+  "description": "焼酎用甘藷の圃場・作業管理アプリ",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f7f5f0",
+  "theme_color": "#2d6a4f",
+  "orientation": "portrait-primary",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
