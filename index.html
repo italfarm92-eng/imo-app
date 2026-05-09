@@ -183,7 +183,10 @@ nav button.on{color:var(--green);border-bottom-color:var(--green);font-weight:70
 
 <div class="hdr">
   <h1>🌿 芋作業管理</h1>
-  <div class="dt" id="todayLbl"></div>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <div class="dt" id="todayLbl"></div>
+    <div id="syncBadge" style="display:none;font-size:.65rem;padding:2px 7px;border-radius:10px;background:rgba(255,255,255,.2);color:#fff;"></div>
+  </div>
 </div>
 
 <nav id="mainNav">
@@ -278,6 +281,19 @@ nav button.on{color:var(--green);border-bottom-color:var(--green);font-weight:70
 
   <!-- 設定 -->
   <div class="tab" id="tab-settings">
+    <div class="card" id="githubSettingCard">
+      <div class="set-title">☁️ GitHubデータ同期</div>
+      <div id="githubStatus" style="margin-bottom:10px;"></div>
+      <div class="form-group">
+        <label class="form-label">Personal Access Token</label>
+        <input class="form-input" type="password" id="ghToken" placeholder="ghp_xxxxxxxxxxxx">
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn-primary" id="ghSaveTokenBtn">トークンを保存</button>
+        <button class="btn-secondary" id="ghSyncNowBtn">今すぐ同期</button>
+      </div>
+      <div style="font-size:.7rem;color:var(--sub);margin-top:8px;">※ トークンはこの端末のみに保存されます。GitHubには送信しません。</div>
+    </div>
     <div class="card">
       <div class="set-title">作業ステップ設定（除草剤・防除）</div>
       <div id="taskDefList"></div>
@@ -438,52 +454,225 @@ var fieldsData = [
 
 // ============================================================
 // ============================================================
-// 全データ永続化（localStorage）
+// データ永続化（localStorage + GitHub API）
 // ============================================================
 var comps = {};
 
-// 全データ保存（圃場・品種・反収・単価・作業ステップ・完了状態）
-function saveAll() {
+// GitHub設定
+var GH_OWNER = 'italfarm92-eng';
+var GH_REPO  = 'imo-app';
+var GH_FILE  = 'data.json';
+var GH_API   = 'https://api.github.com/repos/' + GH_OWNER + '/' + GH_REPO + '/contents/' + GH_FILE;
+var _ghToken = '';
+var _ghSha   = '';       // GitHubファイルのSHA（更新時に必要）
+var _syncTimer = null;   // 保存デバウンス用
+
+// トークン読み込み
+(function(){
+  try { _ghToken = localStorage.getItem('imoApp_ghToken') || ''; } catch(e){}
+})();
+
+// ============================================================
+// localStorageへの即時保存（バックアップ）
+// ============================================================
+function saveLocal() {
   try {
-    localStorage.setItem('imoApp_comps',     JSON.stringify(comps));
-    localStorage.setItem('imoApp_fields',    JSON.stringify(fieldsData));
-    localStorage.setItem('imoApp_varieties', JSON.stringify(varieties));
-    localStorage.setItem('imoApp_yieldRate', JSON.stringify(yieldRate));
-    localStorage.setItem('imoApp_unitPrice', JSON.stringify(unitPrice));
-    localStorage.setItem('imoApp_taskDefs',  JSON.stringify(taskDefs));
-  } catch(e) { console.warn('保存エラー:', e); }
+    var data = buildDataObj();
+    localStorage.setItem('imoApp_data', JSON.stringify(data));
+  } catch(e) { console.warn('local保存エラー:', e); }
 }
 
-// 起動時に全データ復元
-function loadAll() {
+function loadLocal() {
   try {
+    var s = localStorage.getItem('imoApp_data');
+    if (s) { applyDataObj(JSON.parse(s)); return true; }
+    // 旧形式マイグレーション
     var c = localStorage.getItem('imoApp_comps');
     if (c) comps = JSON.parse(c);
-
     var fd = localStorage.getItem('imoApp_fields');
     if (fd) fieldsData = JSON.parse(fd);
-
     var vr = localStorage.getItem('imoApp_varieties');
     if (vr) varieties = JSON.parse(vr);
-
     var yr = localStorage.getItem('imoApp_yieldRate');
     if (yr) yieldRate = JSON.parse(yr);
-
     var up = localStorage.getItem('imoApp_unitPrice');
     if (up) unitPrice = JSON.parse(up);
-
     var td = localStorage.getItem('imoApp_taskDefs');
     if (td) taskDefs = JSON.parse(td);
-  } catch(e) { console.warn('読込エラー:', e); }
+    return false;
+  } catch(e) { console.warn('local読込エラー:', e); return false; }
 }
 
-// 後方互換：旧キーからマイグレーション
-(function(){
-  var old = localStorage.getItem('imoComp3');
-  if (old && !localStorage.getItem('imoApp_comps')) {
-    try { comps = JSON.parse(old); saveAll(); } catch(e){}
+// ============================================================
+// データオブジェクト変換
+// ============================================================
+function buildDataObj() {
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    comps: comps,
+    fieldsData: fieldsData,
+    varieties: varieties,
+    yieldRate: yieldRate,
+    unitPrice: unitPrice,
+    taskDefs: taskDefs
+  };
+}
+
+function applyDataObj(obj) {
+  if (!obj) return;
+  if (obj.comps)      comps      = obj.comps;
+  if (obj.fieldsData) fieldsData = obj.fieldsData;
+  if (obj.varieties)  varieties  = obj.varieties;
+  if (obj.yieldRate)  yieldRate  = obj.yieldRate;
+  if (obj.unitPrice)  unitPrice  = obj.unitPrice;
+  if (obj.taskDefs)   taskDefs   = obj.taskDefs;
+}
+
+// ============================================================
+// GitHubへの保存
+// ============================================================
+function saveToGitHub(cb) {
+  if (!_ghToken) { if (cb) cb(false, 'トークン未設定'); return; }
+  setSyncBadge('saving');
+  var content = btoa(unescape(encodeURIComponent(JSON.stringify(buildDataObj(), null, 2))));
+  var body = { message: 'データ更新 ' + new Date().toLocaleString('ja'), content: content };
+  if (_ghSha) body.sha = _ghSha;
+  fetch(GH_API, {
+    method: 'PUT',
+    headers: {
+      'Authorization': 'token ' + _ghToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.content && data.content.sha) {
+      _ghSha = data.content.sha;
+      setSyncBadge('ok');
+      if (cb) cb(true);
+    } else {
+      setSyncBadge('error');
+      console.warn('GitHub保存エラー:', data);
+      if (cb) cb(false, JSON.stringify(data.message||data));
+    }
+  })
+  .catch(function(e) {
+    setSyncBadge('error');
+    if (cb) cb(false, e.toString());
+  });
+}
+
+// ============================================================
+// GitHubからの読み込み
+// ============================================================
+function loadFromGitHub(cb) {
+  if (!_ghToken) { if (cb) cb(false); return; }
+  setSyncBadge('loading');
+  fetch(GH_API + '?t=' + Date.now(), {
+    headers: { 'Authorization': 'token ' + _ghToken }
+  })
+  .then(function(r) {
+    if (r.status === 404) { setSyncBadge('ok'); if (cb) cb(false, '404'); return null; }
+    return r.json();
+  })
+  .then(function(data) {
+    if (!data) return;
+    if (data.content && data.sha) {
+      _ghSha = data.sha;
+      var json = decodeURIComponent(escape(atob(data.content.replace(/\n/g,''))));
+      var obj = JSON.parse(json);
+      applyDataObj(obj);
+      saveLocal();
+      setSyncBadge('ok');
+      if (cb) cb(true);
+    } else {
+      setSyncBadge('error');
+      if (cb) cb(false, JSON.stringify(data.message||data));
+    }
+  })
+  .catch(function(e) {
+    setSyncBadge('error');
+    if (cb) cb(false, e.toString());
+  });
+}
+
+// ============================================================
+// 同期バッジ表示
+// ============================================================
+function setSyncBadge(state) {
+  var b = document.getElementById('syncBadge');
+  if (!b) return;
+  var map = { ok:'☁️ 同期済', saving:'⬆️ 保存中...', loading:'⬇️ 読込中...', error:'⚠️ 同期エラー', notoken:'─' };
+  b.textContent = map[state] || state;
+  b.style.display = state === 'notoken' ? 'none' : 'flex';
+  b.style.background = state==='error' ? 'rgba(193,18,31,.5)' : 'rgba(255,255,255,.2)';
+}
+
+// ============================================================
+// 統合保存（local即時 + GitHub遅延）
+// ============================================================
+function saveAll() {
+  saveLocal();
+  if (!_ghToken) return;
+  clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(function() {
+    saveToGitHub(function(ok, err) {
+      if (!ok) { showToast('⚠️ GitHub同期エラー: ' + (err||'不明')); }
+    });
+  }, 1500); // 1.5秒後にGitHubへ保存（連続入力対策）
+}
+
+// ============================================================
+// 起動時ロード（GitHub優先・失敗時はlocal）
+// ============================================================
+function loadAll() {
+  loadLocal(); // まずlocalを即時反映
+  if (_ghToken) {
+    loadFromGitHub(function(ok, err) {
+      if (ok) {
+        refreshAll();
+        updateGitHubStatusUI();
+      } else if (err !== '404') {
+        showToast('⚠️ GitHub読込失敗。ローカルデータを使用します。');
+        updateGitHubStatusUI();
+      }
+    });
   }
-})();
+  updateGitHubStatusUI();
+}
+
+// ============================================================
+// 設定UI更新
+// ============================================================
+function updateGitHubStatusUI() {
+  var statusEl = document.getElementById('githubStatus');
+  var tokenEl  = document.getElementById('ghToken');
+  if (!statusEl) return;
+  if (_ghToken) {
+    statusEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--gp);border-radius:8px;">'
+      + '<span style="font-size:1rem;">✅</span>'
+      + '<div><div style="font-size:.82rem;font-weight:700;color:var(--green);">GitHub同期が有効です</div>'
+      + '<div style="font-size:.7rem;color:var(--sub);">'+GH_OWNER+'/'+GH_REPO+'/'+GH_FILE+'</div></div>'
+      + '<button class="del-btn" id="ghClearTokenBtn" style="margin-left:auto;">解除</button>'
+      + '</div>';
+    if (tokenEl) { tokenEl.value = ''; tokenEl.placeholder = '設定済み（変更する場合のみ入力）'; }
+    document.getElementById('ghClearTokenBtn').addEventListener('click', function(){
+      confirm2('GitHub同期を解除しますか？', function(){
+        _ghToken = ''; _ghSha = '';
+        try { localStorage.removeItem('imoApp_ghToken'); } catch(e){}
+        setSyncBadge('notoken');
+        updateGitHubStatusUI();
+        showToast('GitHub同期を解除しました');
+      });
+    });
+  } else {
+    statusEl.innerHTML = '<div style="padding:8px;background:#fff3e0;border-radius:8px;font-size:.78rem;color:var(--amber);">'
+      + '⚠️ トークンを設定するとGitHubにデータが自動保存されます</div>';
+    setSyncBadge('notoken');
+  }
+}
 
 function saveComps() { saveAll(); }
 function isDone(fid,key) { return !!(comps[fid]&&comps[fid][key]); }
@@ -1377,7 +1566,7 @@ function updateSalesNumbers(){
 // ============================================================
 // 初期化
 // ============================================================
-// 保存データ復元（iPhone含む全端末対応）
+// 保存データ復元（GitHub優先・失敗時はlocal）
 loadAll();
 
 document.getElementById('todayLbl').textContent=(TODAY.getMonth()+1)+'/'+TODAY.getDate()+'('+DN[TODAY.getDay()]+')';
@@ -1388,6 +1577,30 @@ refreshAll();
 // iOS Safari向け：ページ離脱前に保存
 window.addEventListener('pagehide', saveAll);
 window.addEventListener('visibilitychange', function(){ if(document.visibilityState==='hidden') saveAll(); });
+
+// GitHub設定ボタン
+document.addEventListener('click', function(e){
+  if (e.target.id === 'ghSaveTokenBtn') {
+    var t = document.getElementById('ghToken').value.trim();
+    if (!t) { showToast('トークンを入力してください'); return; }
+    _ghToken = t;
+    try { localStorage.setItem('imoApp_ghToken', t); } catch(ex){}
+    showToast('トークンを保存しました。GitHubと同期します...');
+    updateGitHubStatusUI();
+    loadFromGitHub(function(ok){
+      if (ok) { refreshAll(); showToast('✅ GitHubからデータを読み込みました'); }
+      else { saveToGitHub(function(ok2){ if(ok2) showToast('✅ GitHubにデータを保存しました'); }); }
+    });
+  }
+  if (e.target.id === 'ghSyncNowBtn') {
+    if (!_ghToken) { showToast('先にトークンを設定してください'); return; }
+    showToast('GitHubと同期中...');
+    loadFromGitHub(function(ok){
+      if (ok) { refreshAll(); showToast('✅ 同期完了'); }
+      else { saveToGitHub(function(ok2){ showToast(ok2 ? '✅ 同期完了' : '⚠️ 同期失敗'); }); }
+    });
+  }
+});
 </script>
 <script>
 // ============================================================
