@@ -263,7 +263,11 @@ nav button.on{color:var(--green);border-bottom-color:var(--green);font-weight:70
       <button class="fbtn" data-f="done">完了済み</button>
       <button class="fbtn" data-f="all">すべて</button>
     </div>
-    <div class="card"><div class="ctitle" id="taskTitle"></div><div id="taskList"></div></div>
+    <div class="card">
+      <div class="ctitle" id="taskTitle"></div>
+      <div id="taskSummary" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;"></div>
+      <div id="taskList"></div>
+    </div>
   </div>
 
   <!-- 売上 -->
@@ -1010,6 +1014,37 @@ function renderTaskTab() {
   })();
   var fl=curFilter==='pending'?'未実施':curFilter==='done'?'完了済み':'すべて';
   document.getElementById('taskTitle').textContent=typeLbl+'　'+fl+'（'+list.length+'件）';
+
+  // サマリー集計（全フィルター対象外も含めた完了・未実施の合計）
+  var allList=[];
+  fields.forEach(function(f){
+    var s=f.steps.find(function(x){return x.key===curType;});
+    if(s) allList.push({f:f,s:s});
+  });
+  var doneList=allList.filter(function(x){return x.s.done;});
+  var pendList=allList.filter(function(x){return !x.s.done;});
+  var doneArea=doneList.reduce(function(sum,x){return sum+x.f.a;},0);
+  var pendArea=pendList.reduce(function(sum,x){return sum+x.f.a;},0);
+  var summaryEl=document.getElementById('taskSummary');
+  if(summaryEl){
+    summaryEl.innerHTML=
+      '<div style="flex:1;background:var(--gp);border-radius:10px;padding:10px;text-align:center;">'
+      +'<div style="font-size:1.3rem;font-weight:700;color:var(--green);">'+doneList.length+'<span style="font-size:.75rem;">件</span></div>'
+      +'<div style="font-size:.85rem;font-weight:700;color:var(--green);">'+Math.round(doneArea*10)/10+'<span style="font-size:.7rem;">a</span></div>'
+      +'<div style="font-size:.65rem;color:var(--sub);margin-top:2px;">✓ 完了済み</div>'
+      +'</div>'
+      +'<div style="flex:1;background:var(--ap);border-radius:10px;padding:10px;text-align:center;">'
+      +'<div style="font-size:1.3rem;font-weight:700;color:var(--amber);">'+pendList.length+'<span style="font-size:.75rem;">件</span></div>'
+      +'<div style="font-size:.85rem;font-weight:700;color:var(--amber);">'+Math.round(pendArea*10)/10+'<span style="font-size:.7rem;">a</span></div>'
+      +'<div style="font-size:.65rem;color:var(--sub);margin-top:2px;">○ 未実施</div>'
+      +'</div>'
+      +'<div style="flex:1;background:#f5f5f5;border-radius:10px;padding:10px;text-align:center;">'
+      +'<div style="font-size:1.3rem;font-weight:700;color:var(--text);">'+allList.length+'<span style="font-size:.75rem;">件</span></div>'
+      +'<div style="font-size:.85rem;font-weight:700;color:var(--text);">'+Math.round((doneArea+pendArea)*10)/10+'<span style="font-size:.7rem;">a</span></div>'
+      +'<div style="font-size:.65rem;color:var(--sub);margin-top:2px;">合計</div>'
+      +'</div>';
+  }
+
   if(!list.length){document.getElementById('taskList').innerHTML='<div class="empty"><div class="eicon">✅</div>該当なし</div>';return;}
   document.getElementById('taskList').innerHTML=list.map(function(item){
     var f=item.f, s=item.s;
