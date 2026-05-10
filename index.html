@@ -507,14 +507,17 @@ function loadLocal() {
 // データオブジェクト変換
 // ============================================================
 function buildDataObj() {
+  // 保存前にyieldRate・unitPriceが空でないか確認
+  var yr = (Object.keys(yieldRate).length > 0) ? yieldRate : {'黄金千貫':250,'タイガン':250,'紅まさり':230,'みちしずく':220};
+  var up = (Object.keys(unitPrice).length > 0) ? unitPrice : {'黄金千貫':18,'タイガン':18,'紅まさり':20,'みちしずく':20};
   return {
     version: 1,
     updatedAt: new Date().toISOString(),
     comps: comps,
     fieldsData: fieldsData,
     varieties: varieties,
-    yieldRate: yieldRate,
-    unitPrice: unitPrice,
+    yieldRate: yr,
+    unitPrice: up,
     taskDefs: taskDefs
   };
 }
@@ -523,10 +526,16 @@ function applyDataObj(obj) {
   if (!obj) return;
   if (obj.comps)      comps      = obj.comps;
   if (obj.fieldsData) fieldsData = obj.fieldsData;
-  if (obj.varieties)  varieties  = obj.varieties;
-  if (obj.yieldRate)  yieldRate  = obj.yieldRate;
-  if (obj.unitPrice)  unitPrice  = obj.unitPrice;
-  if (obj.taskDefs)   taskDefs   = obj.taskDefs;
+  if (obj.varieties && obj.varieties.length > 0)  varieties  = obj.varieties;
+  // yieldRate・unitPriceはキーが存在する場合のみ上書き（空オブジェクト対策）
+  if (obj.yieldRate && Object.keys(obj.yieldRate).length > 0) {
+    // デフォルト値とマージ（保存済みを優先）
+    Object.keys(obj.yieldRate).forEach(function(k){ yieldRate[k] = obj.yieldRate[k]; });
+  }
+  if (obj.unitPrice && Object.keys(obj.unitPrice).length > 0) {
+    Object.keys(obj.unitPrice).forEach(function(k){ unitPrice[k] = obj.unitPrice[k]; });
+  }
+  if (obj.taskDefs && obj.taskDefs.length > 0)   taskDefs   = obj.taskDefs;
 }
 
 // ============================================================
@@ -1519,16 +1528,18 @@ document.body.addEventListener('click',function(e){
 document.body.addEventListener('input',function(e){
   var el=e.target;
   if(el.hasAttribute('data-yieldvar')){
-    yieldRate[el.getAttribute('data-yieldvar')]=parseInt(el.value)||0;
+    var yv=parseInt(el.value);
+    if(yv>0) yieldRate[el.getAttribute('data-yieldvar')]=yv;
     updateSalesNumbers();
     clearTimeout(el._saveTimer);
-    el._saveTimer=setTimeout(saveAll, 800);
+    if(yv>0) el._saveTimer=setTimeout(saveAll, 1000);
   }
   if(el.hasAttribute('data-pricevar')){
-    unitPrice[el.getAttribute('data-pricevar')]=parseInt(el.value)||0;
+    var pv=parseInt(el.value);
+    if(pv>0) unitPrice[el.getAttribute('data-pricevar')]=pv;
     updateSalesNumbers();
     clearTimeout(el._saveTimer);
-    el._saveTimer=setTimeout(saveAll, 800);
+    if(pv>0) el._saveTimer=setTimeout(saveAll, 1000);
   }
 });
 
